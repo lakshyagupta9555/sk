@@ -35,7 +35,7 @@
                 <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wide">Connection Debug</h3>
                 <span class="text-xs text-slate-400">Live</span>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
                 <div class="bg-slate-800 rounded px-2 py-2">
                     <div class="text-slate-400">Socket</div>
                     <div id="state-socket" class="text-slate-100 font-medium">connecting</div>
@@ -55,6 +55,10 @@
                 <div class="bg-slate-800 rounded px-2 py-2">
                     <div class="text-slate-400">Peer Conn</div>
                     <div id="state-peer-connection" class="text-slate-100 font-medium">new</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Path</div>
+                    <div id="state-path" class="text-slate-100 font-medium">unknown</div>
                 </div>
             </div>
         </div>
@@ -301,6 +305,20 @@
     let pendingIceCandidates = [];
     let isMakingOffer = false;
     let isRestartingIce = false;
+    let hasForcedRelay = false;
+    let statsIntervalId = null;
+
+    function normalizeUrls(urlField) {
+        if (Array.isArray(urlField)) return urlField;
+        if (typeof urlField === 'string') return [urlField];
+        return [];
+    }
+
+    function hasTurnServers() {
+        return iceServers.some(server =>
+            normalizeUrls(server.urls).some(url => typeof url === 'string' && url.startsWith('turn:'))
+        );
+    }
 
     function setStateLabel(id, value) {
         const element = document.getElementById(id);
@@ -319,6 +337,7 @@
             setStateLabel('state-ice-connection', 'new');
             setStateLabel('state-ice-gathering', 'new');
             setStateLabel('state-peer-connection', 'new');
+            setStateLabel('state-path', 'unknown');
             return;
         }
 
@@ -326,6 +345,73 @@
         setStateLabel('state-ice-connection', peerConnection.iceConnectionState);
         setStateLabel('state-ice-gathering', peerConnection.iceGatheringState);
         setStateLabel('state-peer-connection', peerConnection.connectionState);
+    }
+
+    async function detectConnectionPath() {
+        if (!peerConnection) {
+            setStateLabel('state-path', 'unknown');
+            return;
+        }
+
+        try {
+            const stats = await peerConnection.getStats();
+            let selectedPair = null;
+
+            stats.forEach(report => {
+                if (report.type === 'transport' && report.selectedCandidatePairId && stats.has(report.selectedCandidatePairId)) {
+                    selectedPair = stats.get(report.selectedCandidatePairId);
+                }
+            });
+
+            if (!selectedPair) {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+                        selectedPair = report;
+                    }
+                });
+            }
+
+            if (!selectedPair) {
+                setStateLabel('state-path', 'unknown');
+                return;
+            }
+
+            const localCandidate = stats.get(selectedPair.localCandidateId);
+            const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+            const localType = localCandidate?.candidateType || '';
+            const remoteType = remoteCandidate?.candidateType || '';
+
+            if (localType === 'relay' || remoteType === 'relay') {
+                setStateLabel('state-path', 'relay');
+                return;
+            }
+
+            if (localType || remoteType) {
+                setStateLabel('state-path', 'direct');
+                return;
+            }
+
+            setStateLabel('state-path', 'unknown');
+        } catch (error) {
+            setStateLabel('state-path', 'unknown');
+        }
+    }
+
+    function startStatsPolling() {
+        if (statsIntervalId) {
+            clearInterval(statsIntervalId);
+        }
+
+        statsIntervalId = setInterval(() => {
+            detectConnectionPath();
+        }, 1500);
+    }
+
+    function stopStatsPolling() {
+        if (statsIntervalId) {
+            clearInterval(statsIntervalId);
+            statsIntervalId = null;
+        }
     }
 
     function sendSignal(type, payload) {
@@ -385,6 +471,7 @@
         peerConnection = new RTCPeerConnection(rtcConfig);
         remoteStream = new MediaStream();
         document.getElementById('remote-video').srcObject = remoteStream;
+        startStatsPolling();
 
         await syncPeerConnectionTracks();
 
@@ -405,6 +492,11 @@
                     restartIceIfNeeded();
                 }, 300);
             }
+            if (peerConnection.iceConnectionState === 'failed') {
+                setTimeout(() => {
+                    forceRelayAndRecover();
+                }, 800);
+            }
         };
 
         peerConnection.onicegatheringstatechange = () => {
@@ -413,10 +505,16 @@
 
         peerConnection.onconnectionstatechange = () => {
             updatePeerStateLabels();
+            detectConnectionPath();
             if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
                 setTimeout(() => {
                     restartIceIfNeeded();
                 }, 300);
+            }
+            if (peerConnection.connectionState === 'failed') {
+                setTimeout(() => {
+                    forceRelayAndRecover();
+                }, 800);
             }
         };
 
@@ -476,6 +574,21 @@
             console.error('ICE restart failed:', error);
         } finally {
             isRestartingIce = false;
+        }
+    }
+
+    async function forceRelayAndRecover() {
+        if (!peerConnection || hasForcedRelay || !hasTurnServers()) return;
+
+        hasForcedRelay = true;
+        try {
+            peerConnection.setConfiguration({
+                ...rtcConfig,
+                iceTransportPolicy: 'relay'
+            });
+            await restartIceIfNeeded();
+        } catch (error) {
+            console.error('Relay fallback failed:', error);
         }
     }
 
@@ -844,11 +957,14 @@
             peerConnection = null;
         }
 
+        stopStatsPolling();
+
         pendingIceCandidates = [];
         hasSentOffer = false;
         remoteParticipantPresent = false;
         isMakingOffer = false;
         isRestartingIce = false;
+        hasForcedRelay = false;
 
         if (closeSocket && videoSocket && videoSocket.readyState !== WebSocket.CLOSED) {
             videoSocket.close();
@@ -891,6 +1007,7 @@
     // Start on load
     updateSocketStateLabel();
     updatePeerStateLabels();
+    detectConnectionPath();
 
     startLocalStream().then(() => {
         if (videoSocket.readyState === WebSocket.OPEN && isCaller) {
