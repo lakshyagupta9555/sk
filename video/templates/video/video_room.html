@@ -131,21 +131,89 @@
 <script>
     const roomId = "{{ call.room_id }}";
     const username = "{{ request.user.username }}";
+    const isCaller = {{ call.caller_id }} === {{ request.user.id }};
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const endCallUrl = "{% url 'video:end_call' call.room_id %}";
+    const callListUrl = "{% url 'video:call_list' %}";
+    const csrfToken = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrftoken='))
+        ?.split('=')[1] || '';
+    const rtcConfig = {
+        iceServers: [
+            {
+                urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']
+            }
+        ]
+    };
     
     // WebSocket connection for whiteboard sharing
     const videoSocket = new WebSocket(
-        'ws://' + window.location.host + '/ws/video/' + roomId + '/'
+        wsProtocol + window.location.host + '/ws/video/' + roomId + '/'
     );
 
     videoSocket.onopen = function() {
         console.log('Video WebSocket connected');
     };
 
-    videoSocket.onmessage = function(e) {
+    videoSocket.onmessage = async function(e) {
         const data = JSON.parse(e.data);
-        
-        // Don't render own actions (already rendered locally)
+
         if (data.sender === username) return;
+
+        if (data.type === 'participant_joined') {
+            remoteParticipantPresent = true;
+            await tryStartOffer();
+            return;
+        }
+
+        if (data.type === 'participant_left') {
+            await cleanupMedia(false);
+            alert('Other participant left the call.');
+            window.location.href = callListUrl;
+            return;
+        }
+
+        if (data.type === 'offer') {
+            await ensurePeerConnection();
+            await syncPeerConnectionTracks();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+            await flushPendingIceCandidates();
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendSignal('answer', peerConnection.localDescription);
+            return;
+        }
+
+        if (data.type === 'answer') {
+            await ensurePeerConnection();
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+            await flushPendingIceCandidates();
+            return;
+        }
+
+        if (data.type === 'ice_candidate') {
+            if (data.payload) {
+                await ensurePeerConnection();
+                if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+                    pendingIceCandidates.push(data.payload);
+                } else {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.payload));
+                    } catch (error) {
+                        console.error('Failed to add ICE candidate:', error);
+                    }
+                }
+            }
+            return;
+        }
+
+        if (data.type === 'end_call') {
+            await cleanupMedia(false);
+            alert('Call ended by other participant.');
+            window.location.href = callListUrl;
+            return;
+        }
         
         if (data.type === 'whiteboard') {
             if (data.action === 'draw') {
@@ -190,10 +258,96 @@
     };
 
     let localStream;
+    let remoteStream;
+    let peerConnection;
     let audioEnabled = true;
     let videoEnabled = true;
     let screenStream = null;
     let isScreenSharing = false;
+    let hasSentOffer = false;
+    let isEndingCall = false;
+    let remoteParticipantPresent = false;
+    let pendingIceCandidates = [];
+
+    function sendSignal(type, payload) {
+        if (videoSocket.readyState !== WebSocket.OPEN) return;
+        videoSocket.send(JSON.stringify({
+            type,
+            payload
+        }));
+    }
+
+    async function flushPendingIceCandidates() {
+        if (!peerConnection || !peerConnection.remoteDescription) return;
+
+        while (pendingIceCandidates.length > 0) {
+            const candidate = pendingIceCandidates.shift();
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error('Failed to add queued ICE candidate:', error);
+            }
+        }
+    }
+
+    async function syncPeerConnectionTracks() {
+        if (!peerConnection || !localStream) return;
+
+        const senders = peerConnection.getSenders();
+        const localTracks = localStream.getTracks();
+
+        for (const track of localTracks) {
+            const sender = senders.find(s => s.track && s.track.kind === track.kind);
+            if (sender) {
+                await sender.replaceTrack(track);
+            } else {
+                peerConnection.addTrack(track, localStream);
+            }
+        }
+    }
+
+    async function replaceOutgoingVideoTrack(videoTrack) {
+        if (!peerConnection) return;
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) {
+            await sender.replaceTrack(videoTrack);
+        }
+    }
+
+    async function tryStartOffer() {
+        if (!isCaller || hasSentOffer || !remoteParticipantPresent || !localStream) return;
+        if (videoSocket.readyState !== WebSocket.OPEN) return;
+        await createAndSendOffer();
+    }
+
+    async function ensurePeerConnection() {
+        if (peerConnection) return;
+
+        peerConnection = new RTCPeerConnection(rtcConfig);
+        remoteStream = new MediaStream();
+        document.getElementById('remote-video').srcObject = remoteStream;
+
+        await syncPeerConnectionTracks();
+
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                sendSignal('ice_candidate', event.candidate);
+            }
+        };
+
+        peerConnection.ontrack = event => {
+            event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+        };
+    }
+
+    async function createAndSendOffer() {
+        await ensurePeerConnection();
+        await syncPeerConnectionTracks();
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        sendSignal('offer', peerConnection.localDescription);
+        hasSentOffer = true;
+    }
 
     // Get user media
     async function startLocalStream() {
@@ -203,6 +357,9 @@
                 audio: true 
             });
             document.getElementById('local-video').srcObject = localStream;
+            await ensurePeerConnection();
+            await syncPeerConnectionTracks();
+            await tryStartOffer();
         } catch (error) {
             console.error('Error accessing media devices:', error);
             alert('Unable to access camera/microphone');
@@ -239,6 +396,7 @@
                     video: true 
                 });
                 document.getElementById('local-video').srcObject = screenStream;
+                await replaceOutgoingVideoTrack(screenStream.getVideoTracks()[0]);
                 isScreenSharing = true;
                 this.textContent = '🖥️ Stop Sharing';
                 this.classList.remove('bg-purple-600');
@@ -262,6 +420,11 @@
             screenStream.getTracks().forEach(track => track.stop());
         }
         document.getElementById('local-video').srcObject = localStream;
+        if (localStream && localStream.getVideoTracks().length > 0) {
+            replaceOutgoingVideoTrack(localStream.getVideoTracks()[0]).catch(error => {
+                console.error('Failed to restore camera track:', error);
+            });
+        }
         isScreenSharing = false;
         document.getElementById('share-screen').textContent = '🖥️ Share Screen';
         document.getElementById('share-screen').classList.remove('bg-red-600');
@@ -359,10 +522,12 @@
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
             // Broadcast clear action
-            videoSocket.send(JSON.stringify({
-                'type': 'whiteboard_clear',
-                'sender': username
-            }));
+            if (videoSocket.readyState === WebSocket.OPEN) {
+                videoSocket.send(JSON.stringify({
+                    'type': 'whiteboard_clear',
+                    'sender': username
+                }));
+            }
         }
     };
 
@@ -386,31 +551,35 @@
                 ctx.fillText(text, coords.x, coords.y);
                 
                 // Broadcast text action
-                videoSocket.send(JSON.stringify({
-                    'type': 'whiteboard',
-                    'action': 'text',
-                    'tool': 'text',
-                    'color': currentColor,
-                    'size': penSize,
-                    'x': coords.x,
-                    'y': coords.y,
-                    'text': text,
-                    'sender': username
-                }));
+                if (videoSocket.readyState === WebSocket.OPEN) {
+                    videoSocket.send(JSON.stringify({
+                        'type': 'whiteboard',
+                        'action': 'text',
+                        'tool': 'text',
+                        'color': currentColor,
+                        'size': penSize,
+                        'x': coords.x,
+                        'y': coords.y,
+                        'text': text,
+                        'sender': username
+                    }));
+                }
             }
         } else if (currentTool === 'fill') {
             floodFill(coords.x, coords.y, currentColor);
             
             // Broadcast fill action
-            videoSocket.send(JSON.stringify({
-                'type': 'whiteboard',
-                'action': 'fill',
-                'tool': 'fill',
-                'color': currentColor,
-                'x': coords.x,
-                'y': coords.y,
-                'sender': username
-            }));
+            if (videoSocket.readyState === WebSocket.OPEN) {
+                videoSocket.send(JSON.stringify({
+                    'type': 'whiteboard',
+                    'action': 'fill',
+                    'tool': 'fill',
+                    'color': currentColor,
+                    'x': coords.x,
+                    'y': coords.y,
+                    'sender': username
+                }));
+            }
         } else {
             isDrawing = true;
             lastX = coords.x;
@@ -440,18 +609,20 @@
         ctx.stroke();
         
         // Broadcast drawing action
-        videoSocket.send(JSON.stringify({
-            'type': 'whiteboard',
-            'action': 'draw',
-            'tool': currentTool,
-            'color': currentColor,
-            'size': penSize,
-            'x': coords.x,
-            'y': coords.y,
-            'lastX': lastX,
-            'lastY': lastY,
-            'sender': username
-        }));
+        if (videoSocket.readyState === WebSocket.OPEN) {
+            videoSocket.send(JSON.stringify({
+                'type': 'whiteboard',
+                'action': 'draw',
+                'tool': currentTool,
+                'color': currentColor,
+                'size': penSize,
+                'x': coords.x,
+                'y': coords.y,
+                'lastX': lastX,
+                'lastY': lastY,
+                'sender': username
+            }));
+        }
         
         lastX = coords.x;
         lastY = coords.y;
@@ -527,41 +698,66 @@
         } : { r: 0, g: 0, b: 0 };
     }
 
-    // End call
-    document.getElementById('end-call').onclick = async function() {
-        // Stop local stream
+    async function cleanupMedia(closeSocket = true) {
         if (localStream) {
             localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
         }
-        
-        // Stop screen sharing if active
+
         if (screenStream) {
             screenStream.getTracks().forEach(track => track.stop());
+            screenStream = null;
         }
-        
-        // Close WebSocket connection
-        if (videoSocket) {
+
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+
+        pendingIceCandidates = [];
+        hasSentOffer = false;
+        remoteParticipantPresent = false;
+
+        if (closeSocket && videoSocket && videoSocket.readyState !== WebSocket.CLOSED) {
             videoSocket.close();
         }
-        
-        // Update call status on server
+    }
+
+    function waitForSignalDelivery() {
+        return new Promise(resolve => setTimeout(resolve, 150));
+    }
+
+    async function endCall() {
+        if (isEndingCall) return;
+        isEndingCall = true;
+
+        sendSignal('end_call', null);
+        await waitForSignalDelivery();
+
         try {
-            await fetch("{% url 'video:end_call' call.room_id %}", {
+            await fetch(endCallUrl, {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: {
-                    'X-CSRFToken': '{{ csrf_token }}',
+                    'X-CSRFToken': csrfToken,
                     'Content-Type': 'application/json'
                 }
             });
         } catch (error) {
             console.error('Error ending call:', error);
         }
-        
-        // Redirect to call list
-        window.location.href = "{% url 'video:call_list' %}";
-    };
+
+        await cleanupMedia(true);
+        window.location.href = callListUrl;
+    }
+
+    document.getElementById('end-call').onclick = endCall;
 
     // Start on load
-    startLocalStream();
+    startLocalStream().then(() => {
+        if (videoSocket.readyState === WebSocket.OPEN && isCaller) {
+            // Offer is triggered once another participant joins.
+        }
+    });
 </script>
 {% endblock %}

@@ -47,8 +47,9 @@
 <script>
     const roomName = "{{ room.name }}";
     const username = "{{ request.user.username }}";
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
     const chatSocket = new WebSocket(
-        'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
+        wsProtocol + window.location.host + '/ws/chat/' + roomName + '/'
     );
 
     chatSocket.onmessage = function(e) {
@@ -79,10 +80,9 @@
         const messageInput = document.getElementById('message-input');
         const message = messageInput.value.trim();
         
-        if (message) {
+        if (message && chatSocket.readyState === WebSocket.OPEN) {
             chatSocket.send(JSON.stringify({
-                'message': message,
-                'username': username
+                'message': message
             }));
             messageInput.value = '';
         }
