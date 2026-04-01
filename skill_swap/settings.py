@@ -141,6 +141,8 @@ if ice_servers_json:
     except json.JSONDecodeError:
         pass
 
+WEBRTC_FORCE_RELAY = os.environ.get('WEBRTC_FORCE_RELAY', 'False').lower() == 'true'
+
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
 LOGGING = {

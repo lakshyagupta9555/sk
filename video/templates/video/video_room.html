@@ -174,9 +174,11 @@
         .split('; ')
         .find(row => row.startsWith('csrftoken='))
         ?.split('=')[1] || '';
+    const forceRelay = {{ webrtc_force_relay|yesno:'true,false' }};
     const iceServers = JSON.parse(document.getElementById('webrtc-ice-servers').textContent);
     const rtcConfig = {
-        iceServers
+        iceServers,
+        iceTransportPolicy: forceRelay ? 'relay' : 'all'
     };
     
     // WebSocket connection for whiteboard sharing

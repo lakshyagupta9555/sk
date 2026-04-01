@@ -64,6 +64,7 @@ def video_room(request, room_id):
         'call': call,
         'room_id': room_id,
         'webrtc_ice_servers': settings.WEBRTC_ICE_SERVERS,
+        'webrtc_force_relay': settings.WEBRTC_FORCE_RELAY,
     }
     return render(request, 'video/video_room.html', context)
 
