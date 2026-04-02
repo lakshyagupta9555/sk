@@ -61,6 +61,28 @@
                     <div id="state-path" class="text-slate-100 font-medium">unknown</div>
                 </div>
             </div>
+            <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">ICE Queued</div>
+                    <div id="state-ice-queued" class="text-slate-100 font-medium">0</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">ICE Flushed</div>
+                    <div id="state-ice-flushed" class="text-slate-100 font-medium">0</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">ICE Applied</div>
+                    <div id="state-ice-applied" class="text-slate-100 font-medium">0</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Last ICE</div>
+                    <div id="state-ice-last" class="text-slate-100 font-medium truncate">none</div>
+                </div>
+            </div>
+            <div class="mt-3 bg-slate-800 rounded p-3">
+                <div class="text-slate-400 text-xs uppercase tracking-wide mb-2">ICE Event Log</div>
+                <div id="ice-event-log" class="space-y-1 max-h-28 overflow-y-auto text-xs text-slate-200"></div>
+            </div>
         </div>
         
         <div class="mt-6 flex justify-center flex-wrap gap-3">
@@ -78,12 +100,7 @@
             </button>
         </div>
         
-        <div class="mt-4 p-4 bg-yellow-900 border border-yellow-700 rounded-lg">
-            <p class="text-yellow-200 text-sm">
-                <strong>Note:</strong> For full video calling functionality, you would need to integrate a WebRTC service like 
-                Agora, Twilio, or implement a custom TURN/STUN server setup.
-            </p>
-        </div>
+        
     </div>
 </div>
 
@@ -244,18 +261,7 @@
 
         if (data.type === 'ice_candidate') {
             if (data.sender === username) return;
-            if (data.payload) {
-                await ensurePeerConnection();
-                if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
-                    pendingIceCandidates.push(data.payload);
-                } else {
-                    try {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.payload));
-                    } catch (error) {
-                        console.error('Failed to add ICE candidate:', error);
-                    }
-                }
-            }
+            await addIceCandidateSafely(data.payload);
             return;
         }
 
@@ -323,6 +329,11 @@
     let isEndingCall = false;
     let remoteParticipantPresent = false;
     let pendingIceCandidates = [];
+    let iceCandidatesQueued = 0;
+    let iceCandidatesFlushed = 0;
+    let iceCandidatesApplied = 0;
+    let lastIceEvent = 'none';
+    let iceEventHistory = [];
     let isMakingOffer = false;
     let isRestartingIce = false;
     let hasForcedRelay = false;
@@ -344,6 +355,28 @@
         const element = document.getElementById(id);
         if (!element) return;
         element.textContent = value || 'n/a';
+    }
+
+    function addIceEvent(message) {
+        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        lastIceEvent = message;
+        iceEventHistory.unshift(`[${timestamp}] ${message}`);
+        iceEventHistory = iceEventHistory.slice(0, 6);
+        updateIceDiagnostics();
+    }
+
+    function updateIceDiagnostics() {
+        setStateLabel('state-ice-queued', String(iceCandidatesQueued));
+        setStateLabel('state-ice-flushed', String(iceCandidatesFlushed));
+        setStateLabel('state-ice-applied', String(iceCandidatesApplied));
+        setStateLabel('state-ice-last', lastIceEvent);
+
+        const logElement = document.getElementById('ice-event-log');
+        if (!logElement) return;
+
+        logElement.innerHTML = iceEventHistory.length
+            ? iceEventHistory.map(entry => `<div class="text-slate-300 break-words">${entry}</div>`).join('')
+            : '<div class="text-slate-500">No ICE activity yet.</div>';
     }
 
     function updateSocketStateLabel() {
@@ -442,15 +475,49 @@
         }));
     }
 
+    function describeIceCandidate(candidate) {
+        if (!candidate) return 'unknown candidate';
+        const candidateType = candidate.candidateType || candidate.type || 'unknown';
+        const transport = candidate.protocol || candidate.relayProtocol || 'unknown transport';
+        const address = candidate.address || candidate.ip || candidate.relatedAddress || 'unknown address';
+        return `${candidateType} via ${transport} @ ${address}`;
+    }
+
+    async function addIceCandidateSafely(candidate) {
+        if (!candidate) return;
+
+        await ensurePeerConnection();
+
+        if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+            pendingIceCandidates.push(candidate);
+            iceCandidatesQueued += 1;
+            addIceEvent(`queued remote ICE candidate: ${describeIceCandidate(candidate)}`);
+            return;
+        }
+
+        try {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            iceCandidatesApplied += 1;
+            addIceEvent(`applied remote ICE candidate: ${describeIceCandidate(candidate)}`);
+        } catch (error) {
+            console.error('Failed to add ICE candidate:', error);
+            addIceEvent(`failed to apply remote ICE candidate: ${describeIceCandidate(candidate)}`);
+        }
+    }
+
     async function flushPendingIceCandidates() {
         if (!peerConnection || !peerConnection.remoteDescription) return;
 
         while (pendingIceCandidates.length > 0) {
             const candidate = pendingIceCandidates.shift();
+            iceCandidatesFlushed += 1;
             try {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                iceCandidatesApplied += 1;
+                addIceEvent(`flushed queued remote ICE candidate: ${describeIceCandidate(candidate)}`);
             } catch (error) {
                 console.error('Failed to add queued ICE candidate:', error);
+                addIceEvent(`failed while flushing remote ICE candidate: ${describeIceCandidate(candidate)}`);
             }
         }
     }
@@ -498,6 +565,7 @@
 
         peerConnection.onicecandidate = event => {
             if (event.candidate) {
+                addIceEvent(`generated local ICE candidate: ${describeIceCandidate(event.candidate)}`);
                 sendSignal('ice_candidate', event.candidate);
             }
         };
@@ -544,6 +612,10 @@
         };
 
         peerConnection.onnegotiationneeded = async () => {
+            if (!isCaller) {
+                return;
+            }
+
             if (!remoteParticipantPresent || isMakingOffer || peerConnection.signalingState !== 'stable') {
                 return;
             }
@@ -981,6 +1053,11 @@
         stopStatsPolling();
 
         pendingIceCandidates = [];
+        iceCandidatesQueued = 0;
+        iceCandidatesFlushed = 0;
+        iceCandidatesApplied = 0;
+        lastIceEvent = 'none';
+        iceEventHistory = [];
         hasSentOffer = false;
         remoteParticipantPresent = false;
         isMakingOffer = false;
@@ -1051,6 +1128,7 @@
     // Start on load
     updateSocketStateLabel();
     updatePeerStateLabels();
+    updateIceDiagnostics();
     detectConnectionPath();
 
     startLocalStream().then(() => {
