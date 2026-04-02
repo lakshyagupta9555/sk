@@ -3,6 +3,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.db.models import Q
 from .models import ChatRoom, Message
+from video.models import VideoCall
 
 @login_required
 def chat_list(request):
@@ -19,11 +20,21 @@ def chat_room(request, room_name):
     
     # Get other participant
     other_user = room.participants.exclude(id=request.user.id).first()
+
+    active_video_call = None
+    if other_user:
+        active_video_call = VideoCall.objects.filter(
+            status__in=['calling', 'active']
+        ).filter(
+            Q(caller=request.user, receiver=other_user) |
+            Q(caller=other_user, receiver=request.user)
+        ).order_by('-started_at').first()
     
     context = {
         'room': room,
         'chat_messages': chat_messages,
         'other_user': other_user,
+        'active_video_call': active_video_call,
     }
     return render(request, 'chat/chat_room.html', context)
 

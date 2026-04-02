@@ -189,20 +189,33 @@
     videoSocket.onopen = function() {
         console.log('Video WebSocket connected');
         updateSocketStateLabel();
+        tryStartOffer().catch(error => {
+            console.error('Offer start on socket open failed:', error);
+        });
     };
 
     videoSocket.onmessage = async function(e) {
         const data = JSON.parse(e.data);
 
-        if (data.sender === username) return;
+        if (data.type === 'room_state') {
+            remoteParticipantPresent = (data.participant_count || 0) > 1;
+            await tryStartOffer();
+            return;
+        }
 
         if (data.type === 'participant_joined') {
+            if (data.sender === username) return;
             remoteParticipantPresent = true;
             await tryStartOffer();
             return;
         }
 
         if (data.type === 'participant_left') {
+            if (typeof data.participant_count === 'number' && data.participant_count <= 1) {
+                remoteParticipantPresent = false;
+            }
+
+            if (data.sender === username) return;
             await cleanupMedia(false);
             alert('Other participant left the call.');
             window.location.href = callListUrl;
@@ -210,6 +223,7 @@
         }
 
         if (data.type === 'offer') {
+            if (data.sender === username) return;
             await ensurePeerConnection();
             await syncPeerConnectionTracks();
             await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
@@ -221,6 +235,7 @@
         }
 
         if (data.type === 'answer') {
+            if (data.sender === username) return;
             await ensurePeerConnection();
             await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
             await flushPendingIceCandidates();
@@ -228,6 +243,7 @@
         }
 
         if (data.type === 'ice_candidate') {
+            if (data.sender === username) return;
             if (data.payload) {
                 await ensurePeerConnection();
                 if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
@@ -244,6 +260,7 @@
         }
 
         if (data.type === 'end_call') {
+            if (data.sender === username) return;
             await cleanupMedia(false);
             alert('Call ended by other participant.');
             window.location.href = callListUrl;
@@ -251,6 +268,7 @@
         }
         
         if (data.type === 'whiteboard') {
+            if (data.sender === username) return;
             if (data.action === 'draw') {
                 // Render drawing from other participant
                 ctx.beginPath();
@@ -462,6 +480,7 @@
     }
 
     async function tryStartOffer() {
+        if (!isCaller) return;
         if (hasSentOffer || !remoteParticipantPresent || !localStream || isMakingOffer) return;
         if (videoSocket.readyState !== WebSocket.OPEN) return;
         await createAndSendOffer();

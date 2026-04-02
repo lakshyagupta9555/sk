@@ -11,10 +11,17 @@
                 <h2 class="text-xl font-bold text-white">{{ other_user.username }}</h2>
                 <p class="text-sm text-gray-400">Online</p>
             </div>
+            {% if active_video_call %}
+            <a href="{% url 'video:video_room' active_video_call.room_id %}" 
+               class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md text-sm">
+                Join Ongoing Call
+            </a>
+            {% else %}
             <a href="{% url 'video:start_call' other_user.id %}" 
                class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">
                 Video Call
             </a>
+            {% endif %}
         </div>
         
         <!-- Messages -->
@@ -22,6 +29,9 @@
             {% for message in chat_messages %}
             <div class="flex {% if message.sender == request.user %}justify-end{% else %}justify-start{% endif %}">
                 <div class="max-w-xs lg:max-w-md">
+                    <p class="text-xs mb-1 {% if message.sender == request.user %}text-cyan-300 text-right{% else %}text-amber-300{% endif %} font-semibold tracking-wide">
+                        {{ message.sender.username }}
+                    </p>
                     <div class="{% if message.sender == request.user %}bg-blue-600{% else %}bg-dark-bg border border-dark-border{% endif %} rounded-lg p-3">
                         <p class="text-sm text-white">{{ message.content }}</p>
                     </div>
@@ -52,6 +62,12 @@
         wsProtocol + window.location.host + '/ws/chat/' + roomName + '/'
     );
 
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     chatSocket.onmessage = function(e) {
         const data = JSON.parse(e.data);
         const messagesDiv = document.getElementById('chat-messages');
@@ -61,8 +77,9 @@
         
         messageDiv.innerHTML = `
             <div class="max-w-xs lg:max-w-md">
+                <p class="text-xs mb-1 ${data.username === username ? 'text-cyan-300 text-right' : 'text-amber-300'} font-semibold tracking-wide">${escapeHtml(data.username)}</p>
                 <div class="${data.username === username ? 'bg-blue-600' : 'bg-dark-bg border border-dark-border'} rounded-lg p-3">
-                    <p class="text-sm text-white">${data.message}</p>
+                    <p class="text-sm text-white">${escapeHtml(data.message)}</p>
                 </div>
                 <p class="text-xs text-gray-500 mt-1">Just now</p>
             </div>

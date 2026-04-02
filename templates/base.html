@@ -265,9 +265,108 @@
     {% endif %}
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main id="page-main-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {% block content %}{% endblock %}
     </main>
+
+    <script>
+        (function() {
+            function isAjaxEligibleForm(form) {
+                if (!form) return false;
+                if (form.dataset.noAjax === 'true' || form.dataset.ajax === 'off') return false;
+                if (form.target && form.target !== '_self') return false;
+
+                const method = (form.getAttribute('method') || 'get').toLowerCase();
+                return method === 'get' || method === 'post';
+            }
+
+            async function handleAjaxFormSubmit(form, submitter) {
+                const method = (form.getAttribute('method') || 'get').toUpperCase();
+                const action = form.getAttribute('action') || window.location.href;
+                const formData = new FormData(form);
+                let fetchUrl = action;
+                const fetchOptions = {
+                    method,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    credentials: 'same-origin'
+                };
+
+                if (method === 'GET') {
+                    const query = new URLSearchParams(formData).toString();
+                    fetchUrl = query ? `${action.split('?')[0]}?${query}` : action.split('?')[0];
+                } else {
+                    fetchOptions.body = formData;
+                }
+
+                const response = await fetch(fetchUrl, fetchOptions);
+
+                if (response.redirected) {
+                    window.location.href = response.url;
+                    return;
+                }
+
+                const contentType = response.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    const data = await response.json();
+                    if (data.redirect_url) {
+                        window.location.href = data.redirect_url;
+                        return;
+                    }
+                    if (!response.ok) {
+                        throw new Error(data.error || 'Request failed');
+                    }
+                    return;
+                }
+
+                const html = await response.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newMain = doc.querySelector('#page-main-content');
+                const currentMain = document.querySelector('#page-main-content');
+
+                if (newMain && currentMain) {
+                    currentMain.innerHTML = newMain.innerHTML;
+                    if (doc.title) {
+                        document.title = doc.title;
+                    }
+                } else {
+                    window.location.reload();
+                }
+            }
+
+            document.addEventListener('submit', async function(event) {
+                const form = event.target;
+                if (!(form instanceof HTMLFormElement)) return;
+                if (!isAjaxEligibleForm(form)) return;
+
+                event.preventDefault();
+
+                const submitter = event.submitter || form.querySelector('[type="submit"]');
+                const originalLabel = submitter ? submitter.innerHTML : null;
+
+                if (submitter) {
+                    submitter.disabled = true;
+                    submitter.classList.add('opacity-70', 'cursor-not-allowed');
+                    submitter.innerHTML = 'Processing...';
+                }
+
+                try {
+                    await handleAjaxFormSubmit(form, submitter);
+                } catch (error) {
+                    console.error('AJAX form submit failed, falling back to normal submit:', error);
+                    form.submit();
+                } finally {
+                    if (submitter) {
+                        submitter.disabled = false;
+                        submitter.classList.remove('opacity-70', 'cursor-not-allowed');
+                        submitter.innerHTML = originalLabel;
+                    }
+                }
+            });
+        })();
+    </script>
 
     {% block extra_js %}{% endblock %}
 </body>

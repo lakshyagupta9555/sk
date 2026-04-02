@@ -1,7 +1,10 @@
 import json
+from collections import defaultdict
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 class VideoCallConsumer(AsyncWebsocketConsumer):
+    active_participants = defaultdict(set)
+
     async def connect(self):
         if not self.scope['user'].is_authenticated:
             await self.close()
@@ -11,21 +14,40 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
         self.room_group_name = f'video_{self.room_id}'
         self.username = self.scope['user'].username
 
+        participants = self.active_participants[self.room_group_name]
+        participants.add(self.channel_name)
+        participant_count = len(participants)
+
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
         await self.accept()
 
+        await self.send(text_data=json.dumps({
+            'type': 'room_state',
+            'participant_count': participant_count,
+        }))
+
         await self.channel_layer.group_send(
             self.room_group_name,
             {
                 'type': 'participant_joined',
                 'sender': self.username,
+                'participant_count': participant_count,
             }
         )
 
     async def disconnect(self, close_code):
+        participant_count = None
+        if hasattr(self, 'room_group_name'):
+            participants = self.active_participants.get(self.room_group_name)
+            if participants is not None:
+                participants.discard(self.channel_name)
+                participant_count = len(participants)
+                if participant_count == 0:
+                    self.active_participants.pop(self.room_group_name, None)
+
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
@@ -37,6 +59,7 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
                 {
                     'type': 'participant_left',
                     'sender': self.username,
+                    'participant_count': participant_count,
                 }
             )
 
@@ -109,13 +132,15 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
     async def participant_joined(self, event):
         await self.send(text_data=json.dumps({
             'type': 'participant_joined',
-            'sender': event.get('sender')
+            'sender': event.get('sender'),
+            'participant_count': event.get('participant_count')
         }))
 
     async def participant_left(self, event):
         await self.send(text_data=json.dumps({
             'type': 'participant_left',
-            'sender': event.get('sender')
+            'sender': event.get('sender'),
+            'participant_count': event.get('participant_count')
         }))
 
     async def webrtc_signal(self, event):
