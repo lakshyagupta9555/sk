@@ -270,5 +270,137 @@
     </main>
 
     {% block extra_js %}{% endblock %}
+
+    {% if user.is_authenticated %}
+    <!-- ===== Incoming Call Modal ===== -->
+    <div id="incoming-call-modal" style="display:none;" class="fixed inset-0 z-[999] flex items-center justify-center p-4" aria-modal="true" role="dialog">
+        <!-- Backdrop -->
+        <div class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <!-- Card -->
+        <div class="relative z-10 bg-slate-800 border border-slate-600 rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center animate-pulse-once">
+            <!-- Animated ring -->
+            <div class="flex justify-center mb-6">
+                <div class="relative">
+                    <div class="w-20 h-20 bg-gradient-to-br from-green-400 to-emerald-600 rounded-full flex items-center justify-center text-4xl shadow-lg">
+                        📞
+                    </div>
+                    <span class="absolute inset-0 rounded-full border-4 border-green-400 animate-ping opacity-75"></span>
+                </div>
+            </div>
+            <h3 class="text-2xl font-bold text-white mb-1">Incoming Video Call</h3>
+            <p class="text-gray-300 mb-2"><span id="call-caller-name" class="font-semibold text-blue-400"></span> is calling you...</p>
+            <p class="text-xs text-gray-500 mb-6">Call will auto-dismiss in <span id="call-countdown">30</span>s</p>
+            <div class="flex gap-3 justify-center">
+                <button id="btn-accept-call"
+                    class="flex-1 bg-green-600 hover:bg-green-500 active:scale-95 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2">
+                    <i class="fas fa-video"></i> Accept
+                </button>
+                <button id="btn-decline-call"
+                    class="flex-1 bg-red-600 hover:bg-red-500 active:scale-95 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center gap-2">
+                    <i class="fas fa-phone-slash"></i> Decline
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Call Declined Toast ===== -->
+    <div id="call-declined-toast" style="display:none;"
+        class="fixed bottom-6 right-6 z-[999] bg-red-800 border border-red-600 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
+        <i class="fas fa-phone-slash text-xl"></i>
+        <span id="call-declined-msg">declined your call.</span>
+    </div>
+
+    <script>
+    (function() {
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const notifSocket = new WebSocket(wsProtocol + window.location.host + '/ws/notifications/');
+
+        let callRoomUrl = null;
+        let callRoomId = null;
+        let callCallerId = null;
+        let countdownTimer = null;
+        let countdownVal = 30;
+
+        const modal = document.getElementById('incoming-call-modal');
+        const callerNameEl = document.getElementById('call-caller-name');
+        const countdownEl = document.getElementById('call-countdown');
+        const btnAccept = document.getElementById('btn-accept-call');
+        const btnDecline = document.getElementById('btn-decline-call');
+        const declinedToast = document.getElementById('call-declined-toast');
+        const declinedMsg = document.getElementById('call-declined-msg');
+
+        function showModal(callerName, roomUrl, roomId, callerId) {
+            callRoomUrl = roomUrl;
+            callRoomId = roomId;
+            callCallerId = callerId;
+            callerNameEl.textContent = callerName;
+            modal.style.display = 'flex';
+            countdownVal = 30;
+            countdownEl.textContent = countdownVal;
+            countdownTimer = setInterval(() => {
+                countdownVal--;
+                countdownEl.textContent = countdownVal;
+                if (countdownVal <= 0) {
+                    dismissModal(true);
+                }
+            }, 1000);
+        }
+
+        function dismissModal(autoDecline) {
+            modal.style.display = 'none';
+            clearInterval(countdownTimer);
+            if (autoDecline && callRoomId) {
+                sendDecline();
+            }
+        }
+
+        function sendDecline() {
+            fetch('/video/decline/' + callRoomId + '/', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'X-CSRFToken': getCsrf(),
+                    'Content-Type': 'application/json'
+                }
+            }).catch(() => {});
+        }
+
+        function getCsrf() {
+            return document.cookie.split('; ')
+                .find(row => row.startsWith('csrftoken='))
+                ?.split('=')[1] || '';
+        }
+
+        function showDeclinedToast(receiverName) {
+            declinedMsg.textContent = receiverName + ' declined your call.';
+            declinedToast.style.display = 'flex';
+            setTimeout(() => { declinedToast.style.display = 'none'; }, 5000);
+        }
+
+        notifSocket.onmessage = function(e) {
+            const data = JSON.parse(e.data);
+            if (data.type === 'incoming_call') {
+                showModal(data.caller, data.room_url, data.room_id, data.caller_id);
+            } else if (data.type === 'call_declined') {
+                showDeclinedToast(data.receiver);
+            }
+        };
+
+        notifSocket.onerror = function(e) {
+            console.warn('Notification WebSocket error:', e);
+        };
+
+        btnAccept.onclick = function() {
+            dismissModal(false);
+            if (callRoomUrl) window.location.href = callRoomUrl;
+        };
+
+        btnDecline.onclick = function() {
+            dismissModal(false);
+            sendDecline();
+        };
+    })();
+    </script>
+    {% endif %}
 </body>
 </html>

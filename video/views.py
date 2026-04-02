@@ -6,6 +6,9 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.contrib import messages
 from django.conf import settings
+from django.urls import reverse
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 from .models import VideoCall, VideoCallRating
 import uuid
 
@@ -33,7 +36,7 @@ def start_call(request, user_id):
     receiver = get_object_or_404(User, id=user_id)
     if receiver == request.user:
         return redirect('dashboard:home')
-    
+
     room_id = str(uuid.uuid4())
     call = VideoCall.objects.create(
         caller=request.user,
@@ -41,28 +44,48 @@ def start_call(request, user_id):
         room_id=room_id,
         status='calling'
     )
-    
+
+    # Build the absolute room URL to send to receiver
+    room_url = request.build_absolute_uri(
+        reverse('video:video_room', kwargs={'room_id': room_id})
+    )
+
+    # Notify receiver in real-time via their notification WebSocket
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f'notifications_{receiver.id}',
+        {
+            'type': 'incoming_call',
+            'caller': request.user.username,
+            'caller_id': request.user.id,
+            'room_id': room_id,
+            'room_url': room_url,
+        }
+    )
+
     return redirect('video:video_room', room_id=room_id)
 
 @login_required
 def video_room(request, room_id):
     call = get_object_or_404(VideoCall, room_id=room_id)
-    
+
     # Check if user is participant
     if call.caller != request.user and call.receiver != request.user:
         return redirect('dashboard:home')
-    
+
     # Don't allow joining ended calls
     if call.status == 'ended':
         return redirect('video:call_list')
-    
-    if call.status == 'calling':
+
+    # Mark active only when the receiver joins (not just the caller alone)
+    if call.status == 'calling' and call.receiver == request.user:
         call.status = 'active'
         call.save()
-    
+
     context = {
         'call': call,
         'room_id': room_id,
+        'current_user': request.user,
         'webrtc_ice_servers': settings.WEBRTC_ICE_SERVERS,
         'webrtc_force_relay': settings.WEBRTC_FORCE_RELAY,
     }
@@ -89,6 +112,33 @@ def end_call(request, room_id):
         call.save()
     
     return JsonResponse({'status': 'success'})
+
+
+@login_required
+def decline_call(request, room_id):
+    """Receiver declined the call — mark missed and notify caller via WebSocket."""
+    call = get_object_or_404(VideoCall, room_id=room_id)
+
+    if call.receiver != request.user:
+        return JsonResponse({'error': 'Not authorized'}, status=403)
+
+    if call.status == 'calling':
+        call.status = 'missed'
+        call.ended_at = timezone.now()
+        call.save()
+
+    # Notify caller that receiver declined
+    channel_layer = get_channel_layer()
+    async_to_sync(channel_layer.group_send)(
+        f'notifications_{call.caller_id}',
+        {
+            'type': 'call_declined',
+            'receiver': request.user.username,
+            'room_id': room_id,
+        }
+    )
+
+    return JsonResponse({'status': 'declined'})
 
 
 @login_required
