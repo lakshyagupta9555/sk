@@ -14,9 +14,12 @@
                     {{ call.caller.username }}
                 {% endif %}
             </h2>
-            <button id="end-call" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-md">
-                End Call
-            </button>
+            <form id="end-call-form" method="post" action="{% url 'video:end_call' call.room_id %}" data-no-ajax="true" class="inline">
+                {% csrf_token %}
+                <button id="end-call" type="submit" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-md">
+                    End Call
+                </button>
+            </form>
         </div>
         
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -546,6 +549,15 @@
         }
     }
 
+    function attachRemoteStream(stream) {
+        const remoteVideo = document.getElementById('remote-video');
+        if (!remoteVideo || !stream) return;
+
+        remoteStream = stream;
+        remoteVideo.srcObject = remoteStream;
+        remoteVideo.play().catch(() => {});
+    }
+
     async function tryStartOffer() {
         if (!isCaller) return;
         if (hasSentOffer || !remoteParticipantPresent || !localStream || isMakingOffer) return;
@@ -558,7 +570,7 @@
 
         peerConnection = new RTCPeerConnection(rtcConfig);
         remoteStream = new MediaStream();
-        document.getElementById('remote-video').srcObject = remoteStream;
+        attachRemoteStream(remoteStream);
         startStatsPolling();
 
         await syncPeerConnectionTracks();
@@ -608,7 +620,18 @@
         };
 
         peerConnection.ontrack = event => {
-            event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+            if (event.streams && event.streams[0]) {
+                attachRemoteStream(event.streams[0]);
+                return;
+            }
+
+            if (event.track) {
+                if (!remoteStream) {
+                    remoteStream = new MediaStream();
+                }
+                remoteStream.addTrack(event.track);
+                attachRemoteStream(remoteStream);
+            }
         };
 
         peerConnection.onnegotiationneeded = async () => {
@@ -1100,7 +1123,10 @@
         window.location.href = callListUrl;
     }
 
-    document.getElementById('end-call').onclick = endCall;
+    document.getElementById('end-call-form').addEventListener('submit', function(event) {
+        event.preventDefault();
+        endCall();
+    });
 
     function cleanupOnNavigateAway() {
         if (isEndingCall) return;

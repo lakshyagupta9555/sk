@@ -29,7 +29,7 @@
                         </span>
                     </div>
                     <div class="flex flex-col items-end gap-2">
-                        {% if call.status == 'active' %}
+                        {% if call.status == 'active' or call.status == 'calling' %}
                         <a href="{% url 'video:video_room' call.room_id %}" 
                            class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">
                             Join Call
