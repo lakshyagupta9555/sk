@@ -246,7 +246,7 @@
             if (data.sender === username) return;
             await ensurePeerConnection();
             await syncPeerConnectionTracks();
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+            await peerConnection.setRemoteDescription(data.payload);
             await flushPendingIceCandidates();
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
@@ -257,7 +257,7 @@
         if (data.type === 'answer') {
             if (data.sender === username) return;
             await ensurePeerConnection();
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+            await peerConnection.setRemoteDescription(data.payload);
             await flushPendingIceCandidates();
             return;
         }
@@ -368,6 +368,13 @@
         updateIceDiagnostics();
     }
 
+    function renderIceLogEntry(text) {
+        const entry = document.createElement('div');
+        entry.className = 'text-slate-300 break-words';
+        entry.textContent = text;
+        return entry;
+    }
+
     function updateIceDiagnostics() {
         setStateLabel('state-ice-queued', String(iceCandidatesQueued));
         setStateLabel('state-ice-flushed', String(iceCandidatesFlushed));
@@ -377,9 +384,19 @@
         const logElement = document.getElementById('ice-event-log');
         if (!logElement) return;
 
-        logElement.innerHTML = iceEventHistory.length
-            ? iceEventHistory.map(entry => `<div class="text-slate-300 break-words">${entry}</div>`).join('')
-            : '<div class="text-slate-500">No ICE activity yet.</div>';
+        logElement.replaceChildren();
+
+        if (iceEventHistory.length === 0) {
+            const emptyState = document.createElement('div');
+            emptyState.className = 'text-slate-500';
+            emptyState.textContent = 'No ICE activity yet.';
+            logElement.appendChild(emptyState);
+            return;
+        }
+
+        iceEventHistory.forEach(entry => {
+            logElement.appendChild(renderIceLogEntry(entry));
+        });
     }
 
     function updateSocketStateLabel() {
