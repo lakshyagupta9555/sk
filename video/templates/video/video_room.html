@@ -1025,6 +1025,29 @@
 
     document.getElementById('end-call').onclick = endCall;
 
+    function cleanupOnNavigateAway() {
+        if (isEndingCall) return;
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            screenStream = null;
+        }
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+        if (videoSocket && (videoSocket.readyState === WebSocket.OPEN || videoSocket.readyState === WebSocket.CONNECTING)) {
+            videoSocket.close();
+        }
+        stopStatsPolling();
+    }
+
+    window.addEventListener('beforeunload', cleanupOnNavigateAway);
+    document.addEventListener('page:beforeSwap', cleanupOnNavigateAway);
+
     // Start on load
     updateSocketStateLabel();
     updatePeerStateLabels();

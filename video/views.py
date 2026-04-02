@@ -78,10 +78,6 @@ def video_room(request, room_id):
     if call.status == 'ended':
         return redirect('video:call_list')
     
-    if call.status == 'calling':
-        call.status = 'active'
-        call.save()
-    
     context = {
         'call': call,
         'room_id': room_id,
@@ -92,6 +88,9 @@ def video_room(request, room_id):
 
 @login_required
 def end_call(request, room_id):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+
     call = get_object_or_404(VideoCall, room_id=room_id)
     
     # Check if user is participant

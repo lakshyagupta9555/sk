@@ -1,6 +1,8 @@
 import json
 from collections import defaultdict
 from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
+from .models import VideoCall
 
 class VideoCallConsumer(AsyncWebsocketConsumer):
     active_participants = defaultdict(set)
@@ -29,6 +31,9 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
             'participant_count': participant_count,
         }))
 
+        if participant_count > 1:
+            await self.mark_call_active()
+
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -48,10 +53,11 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
                 if participant_count == 0:
                     self.active_participants.pop(self.room_group_name, None)
 
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name
-        )
+        if hasattr(self, 'room_group_name'):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
 
         if hasattr(self, 'username'):
             await self.channel_layer.group_send(
@@ -144,8 +150,18 @@ class VideoCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def webrtc_signal(self, event):
+        if event.get('sender') == getattr(self, 'username', None):
+            return
+
         await self.send(text_data=json.dumps({
             'type': event.get('signal_type'),
             'payload': event.get('payload'),
             'sender': event.get('sender')
         }))
+
+    @database_sync_to_async
+    def mark_call_active(self):
+        VideoCall.objects.filter(
+            room_id=self.room_id,
+            status='calling'
+        ).update(status='active')

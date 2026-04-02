@@ -93,6 +93,15 @@
         console.error('Chat socket closed unexpectedly');
     };
 
+    function closeChatSocket() {
+        if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
+            chatSocket.close();
+        }
+    }
+
+    window.addEventListener('beforeunload', closeChatSocket);
+    document.addEventListener('page:beforeSwap', closeChatSocket);
+
     function sendMessage() {
         const messageInput = document.getElementById('message-input');
         const message = messageInput.value.trim();

@@ -254,15 +254,15 @@
     </script>
 
     <!-- Messages -->
-    {% if messages %}
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
-        {% for message in messages %}
-        <div class="bg-{% if message.tags == 'error' %}red{% elif message.tags == 'success' %}green{% else %}blue{% endif %}-900 border border-{% if message.tags == 'error' %}red{% elif message.tags == 'success' %}green{% else %}blue{% endif %}-700 text-white px-4 py-3 rounded mb-4">
-            {{ message }}
-        </div>
-        {% endfor %}
+    <div id="page-flash-messages" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        {% if messages %}
+            {% for message in messages %}
+            <div class="bg-{% if message.tags == 'error' %}red{% elif message.tags == 'success' %}green{% else %}blue{% endif %}-900 border border-{% if message.tags == 'error' %}red{% elif message.tags == 'success' %}green{% else %}blue{% endif %}-700 text-white px-4 py-3 rounded mb-4">
+                {{ message }}
+            </div>
+            {% endfor %}
+        {% endif %}
     </div>
-    {% endif %}
 
     <!-- Main Content -->
     <main id="page-main-content" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -271,6 +271,27 @@
 
     <script>
         (function() {
+            let isAjaxNavigating = false;
+
+            function isModifiedClick(event) {
+                return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0;
+            }
+
+            function isAjaxEligibleLink(link) {
+                if (!link) return false;
+                if (link.dataset.noAjax === 'true' || link.dataset.ajax === 'off') return false;
+                if (link.hasAttribute('download')) return false;
+                if ((link.getAttribute('target') || '_self') !== '_self') return false;
+
+                const href = link.getAttribute('href');
+                if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) return false;
+
+                const url = new URL(link.href, window.location.origin);
+                if (url.origin !== window.location.origin) return false;
+
+                return url.protocol === 'http:' || url.protocol === 'https:';
+            }
+
             function isAjaxEligibleForm(form) {
                 if (!form) return false;
                 if (form.dataset.noAjax === 'true' || form.dataset.ajax === 'off') return false;
@@ -278,6 +299,89 @@
 
                 const method = (form.getAttribute('method') || 'get').toLowerCase();
                 return method === 'get' || method === 'post';
+            }
+
+            function runScriptsFrom(element) {
+                if (!element) return;
+
+                const scripts = element.querySelectorAll('script');
+                scripts.forEach(oldScript => {
+                    const newScript = document.createElement('script');
+
+                    for (const attr of oldScript.attributes) {
+                        newScript.setAttribute(attr.name, attr.value);
+                    }
+
+                    if (!oldScript.src) {
+                        newScript.textContent = oldScript.textContent;
+                    }
+
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+            }
+
+            function swapPageSections(doc, nextUrl, pushState) {
+                const newMain = doc.querySelector('#page-main-content');
+                const currentMain = document.querySelector('#page-main-content');
+                const newMessages = doc.querySelector('#page-flash-messages');
+                const currentMessages = document.querySelector('#page-flash-messages');
+
+                if (!newMain || !currentMain) {
+                    window.location.href = nextUrl;
+                    return;
+                }
+
+                document.dispatchEvent(new CustomEvent('page:beforeSwap'));
+
+                currentMain.innerHTML = newMain.innerHTML;
+                if (currentMessages) {
+                    currentMessages.innerHTML = newMessages ? newMessages.innerHTML : '';
+                }
+
+                if (doc.title) {
+                    document.title = doc.title;
+                }
+
+                runScriptsFrom(currentMain);
+
+                if (pushState) {
+                    history.pushState({ ajax: true }, '', nextUrl);
+                }
+
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                document.dispatchEvent(new CustomEvent('page:loaded'));
+            }
+
+            async function loadUrlWithAjax(url, pushState) {
+                if (isAjaxNavigating) return;
+                isAjaxNavigating = true;
+
+                try {
+                    const response = await fetch(url, {
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest'
+                        },
+                        credentials: 'same-origin'
+                    });
+
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                        return;
+                    }
+
+                    const contentType = response.headers.get('content-type') || '';
+                    if (!contentType.includes('text/html')) {
+                        window.location.href = url;
+                        return;
+                    }
+
+                    const html = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    swapPageSections(doc, url, pushState);
+                } finally {
+                    isAjaxNavigating = false;
+                }
             }
 
             async function handleAjaxFormSubmit(form, submitter) {
@@ -295,10 +399,12 @@
 
                 if (method === 'GET') {
                     const query = new URLSearchParams(formData).toString();
-                    fetchUrl = query ? `${action.split('?')[0]}?${query}` : action.split('?')[0];
-                } else {
-                    fetchOptions.body = formData;
+                    const nextUrl = query ? `${action.split('?')[0]}?${query}` : action.split('?')[0];
+                    await loadUrlWithAjax(nextUrl, true);
+                    return;
                 }
+
+                fetchOptions.body = formData;
 
                 const response = await fetch(fetchUrl, fetchOptions);
 
@@ -323,18 +429,21 @@
                 const html = await response.text();
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
-                const newMain = doc.querySelector('#page-main-content');
-                const currentMain = document.querySelector('#page-main-content');
-
-                if (newMain && currentMain) {
-                    currentMain.innerHTML = newMain.innerHTML;
-                    if (doc.title) {
-                        document.title = doc.title;
-                    }
-                } else {
-                    window.location.reload();
-                }
+                swapPageSections(doc, fetchUrl, true);
             }
+
+            document.addEventListener('click', function(event) {
+                if (isModifiedClick(event)) return;
+
+                const link = event.target.closest('a');
+                if (!isAjaxEligibleLink(link)) return;
+
+                event.preventDefault();
+                loadUrlWithAjax(link.href, true).catch(error => {
+                    console.error('AJAX navigation failed, falling back to full navigation:', error);
+                    window.location.href = link.href;
+                });
+            });
 
             document.addEventListener('submit', async function(event) {
                 const form = event.target;
@@ -364,6 +473,12 @@
                         submitter.innerHTML = originalLabel;
                     }
                 }
+            });
+
+            window.addEventListener('popstate', function() {
+                loadUrlWithAjax(window.location.href, false).catch(() => {
+                    window.location.reload();
+                });
             });
         })();
     </script>
