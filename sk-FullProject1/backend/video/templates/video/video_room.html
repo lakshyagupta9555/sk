@@ -1,0 +1,1076 @@
+{% extends 'base.html' %}
+
+{% block title %}Video Call - Skill Swap{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+    <div class="bg-dark-card rounded-lg shadow-xl border border-dark-border p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-white">
+                Video Call with
+                {% if call.caller == request.user %}
+                {{ call.receiver.username }}
+                {% else %}
+                {{ call.caller.username }}
+                {% endif %}
+            </h2>
+            <button id="end-call" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-md">
+                End Call
+            </button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-dark-bg rounded-lg aspect-video flex items-center justify-center relative">
+                <video id="remote-video" autoplay playsinline class="w-full h-full rounded-lg"></video>
+                <p class="absolute text-gray-400">Remote Video</p>
+            </div>
+            <div class="bg-dark-bg rounded-lg aspect-video flex items-center justify-center relative">
+                <video id="local-video" autoplay muted playsinline class="w-full h-full rounded-lg"></video>
+                <p class="absolute text-gray-400">Your Video</p>
+            </div>
+        </div>
+
+        <div class="mt-4 p-4 bg-slate-900 border border-slate-700 rounded-lg">
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wide">Connection Debug</h3>
+                <span class="text-xs text-slate-400">Live</span>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs">
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Socket</div>
+                    <div id="state-socket" class="text-slate-100 font-medium">connecting</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Signaling</div>
+                    <div id="state-signaling" class="text-slate-100 font-medium">new</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">ICE Conn</div>
+                    <div id="state-ice-connection" class="text-slate-100 font-medium">new</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">ICE Gather</div>
+                    <div id="state-ice-gathering" class="text-slate-100 font-medium">new</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Peer Conn</div>
+                    <div id="state-peer-connection" class="text-slate-100 font-medium">new</div>
+                </div>
+                <div class="bg-slate-800 rounded px-2 py-2">
+                    <div class="text-slate-400">Path</div>
+                    <div id="state-path" class="text-slate-100 font-medium">unknown</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6 flex justify-center flex-wrap gap-3">
+            <button id="toggle-audio" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md">
+                🎤 Mute Audio
+            </button>
+            <button id="toggle-video" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md">
+                📹 Stop Video
+            </button>
+            <button id="share-screen" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-md">
+                🖥️ Share Screen
+            </button>
+            <button id="open-whiteboard" class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-md">
+                📝 Whiteboard
+            </button>
+        </div>
+
+        <!-- Copy Link & Status -->
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button id="copy-room-link"
+                class="bg-slate-700 hover:bg-slate-600 text-white text-sm px-4 py-2 rounded-lg flex items-center gap-2 transition-all">
+                <i class="fas fa-link"></i> Copy Room Link
+            </button>
+            {% if call.status == 'calling' %}
+            <span id="waiting-badge"
+                class="flex items-center gap-2 text-sm text-yellow-300 bg-yellow-900/40 border border-yellow-700 px-4 py-2 rounded-lg">
+                <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse inline-block"></span>
+                Waiting for {{ call.receiver.username }} to join...
+            </span>
+            {% endif %}
+        </div>
+
+
+        <!-- Whiteboard Modal -->
+        <div id="whiteboard-modal"
+            class="hidden fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4">
+            <div
+                class="bg-dark-card rounded-lg shadow-2xl border border-dark-border w-full max-w-6xl max-h-[90vh] flex flex-col">
+                <!-- Whiteboard Header -->
+                <div class="flex justify-between items-center p-4 border-b border-dark-border">
+                    <h3 class="text-xl font-bold text-white">📝 Whiteboard</h3>
+                    <button id="close-whiteboard" class="text-gray-400 hover:text-white text-2xl">×</button>
+                </div>
+
+                <!-- Whiteboard Tools -->
+                <div class="p-4 border-b border-dark-border bg-dark-bg">
+                    <div class="flex flex-wrap gap-3 items-center">
+                        <!-- Drawing Tools -->
+                        <button id="tool-pen"
+                            class="tool-btn bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                            ✏️ Pen
+                        </button>
+                        <button id="tool-eraser"
+                            class="tool-btn bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700">
+                            🧹 Eraser
+                        </button>
+                        <button id="tool-text"
+                            class="tool-btn bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700">
+                            📝 Text
+                        </button>
+                        <button id="tool-fill"
+                            class="tool-btn bg-yellow-600 text-white px-4 py-2 rounded-md hover:bg-yellow-700">
+                            🎨 Fill
+                        </button>
+
+                        <!-- Separator -->
+                        <div class="w-px h-8 bg-dark-border"></div>
+
+                        <!-- Pen Size -->
+                        <div class="flex items-center gap-2">
+                            <label class="text-white text-sm">Size:</label>
+                            <input type="range" id="pen-size" min="1" max="20" value="3" class="w-24">
+                            <span id="size-display" class="text-white text-sm w-8">3</span>
+                        </div>
+
+                        <!-- Separator -->
+                        <div class="w-px h-8 bg-dark-border"></div>
+
+                        <!-- Color Picker -->
+                        <div class="flex items-center gap-2">
+                            <label class="text-white text-sm">Color:</label>
+                            <input type="color" id="pen-color" value="#000000" class="w-12 h-10 rounded cursor-pointer">
+                        </div>
+
+                        <!-- Quick Colors -->
+                        <div class="flex gap-1">
+                            <button class="color-btn w-8 h-8 rounded border-2 border-white" style="background: #000000;"
+                                data-color="#000000"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #FF0000;" data-color="#FF0000"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #00FF00;" data-color="#00FF00"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #0000FF;" data-color="#0000FF"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #FFFF00;" data-color="#FFFF00"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #FF00FF;" data-color="#FF00FF"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #00FFFF;" data-color="#00FFFF"></button>
+                            <button class="color-btn w-8 h-8 rounded border-2 border-gray-600"
+                                style="background: #FFFFFF;" data-color="#FFFFFF"></button>
+                        </div>
+
+                        <!-- Separator -->
+                        <div class="w-px h-8 bg-dark-border"></div>
+
+                        <!-- Clear Canvas -->
+                        <button id="clear-canvas" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md">
+                            🗑️ Clear All
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Canvas Container -->
+                <div class="flex-1 p-4 overflow-auto bg-gray-100">
+                    <canvas id="whiteboard-canvas"
+                        class="border-2 border-gray-300 bg-white cursor-crosshair mx-auto"></canvas>
+                </div>
+            </div>
+        </div>
+
+        {{ webrtc_ice_servers|json_script:"webrtc-ice-servers" }}
+
+        <script>
+            const roomId = "{{ call.room_id }}";
+            const username = "{{ request.user.username }}";
+            const isCaller = {{ call.caller_id }} === {{ request.user.id }};
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const endCallUrl = "{% url 'video:end_call' call.room_id %}";
+            const callListUrl = "{% url 'video:call_list' %}";
+            const csrfToken = document.cookie
+                .split('; ')
+                .find(row => row.startsWith('csrftoken='))
+                ?.split('=')[1] || '';
+            const forceRelay = {{ webrtc_force_relay|yesno:'true,false' }};
+            const iceServers = JSON.parse(document.getElementById('webrtc-ice-servers').textContent);
+            const rtcConfig = {
+                iceServers,
+                iceTransportPolicy: forceRelay ? 'relay' : 'all'
+            };
+
+            // WebSocket connection for whiteboard sharing
+            const videoSocket = new WebSocket(
+                wsProtocol + window.location.host + '/ws/video/' + roomId + '/'
+            );
+
+            videoSocket.onopen = function () {
+                console.log('Video WebSocket connected');
+                updateSocketStateLabel();
+            };
+
+            videoSocket.onmessage = async function (e) {
+                const data = JSON.parse(e.data);
+
+                if (data.sender === username) return;
+
+                if (data.type === 'participant_joined') {
+                    remoteParticipantPresent = true;
+                    await tryStartOffer();
+                    return;
+                }
+
+                if (data.type === 'participant_left') {
+                    await cleanupMedia(false);
+                    alert('Other participant left the call.');
+                    window.location.href = callListUrl;
+                    return;
+                }
+
+                if (data.type === 'offer') {
+                    remoteParticipantPresent = true;  // Caller is present if they sent us an offer
+                    await ensurePeerConnection();
+                    await syncPeerConnectionTracks();
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+                    await flushPendingIceCandidates();
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    sendSignal('answer', peerConnection.localDescription);
+                    return;
+                }
+
+                if (data.type === 'answer') {
+                    await ensurePeerConnection();
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(data.payload));
+                    await flushPendingIceCandidates();
+                    return;
+                }
+
+                if (data.type === 'ice_candidate') {
+                    if (data.payload) {
+                        await ensurePeerConnection();
+                        if (!peerConnection.remoteDescription || !peerConnection.remoteDescription.type) {
+                            pendingIceCandidates.push(data.payload);
+                        } else {
+                            try {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(data.payload));
+                            } catch (error) {
+                                console.error('Failed to add ICE candidate:', error);
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                if (data.type === 'end_call') {
+                    await cleanupMedia(false);
+                    alert('Call ended by other participant.');
+                    window.location.href = callListUrl;
+                    return;
+                }
+
+                if (data.type === 'whiteboard') {
+                    if (data.action === 'draw') {
+                        // Render drawing from other participant
+                        ctx.beginPath();
+                        ctx.moveTo(data.lastX, data.lastY);
+                        ctx.lineTo(data.x, data.y);
+
+                        if (data.tool === 'eraser') {
+                            ctx.strokeStyle = 'white';
+                            ctx.lineWidth = data.size * 3;
+                        } else {
+                            ctx.strokeStyle = data.color;
+                            ctx.lineWidth = data.size;
+                        }
+
+                        ctx.lineCap = 'round';
+                        ctx.lineJoin = 'round';
+                        ctx.stroke();
+                    } else if (data.action === 'text') {
+                        // Render text from other participant
+                        ctx.font = `${data.size * 8}px Arial`;
+                        ctx.fillStyle = data.color;
+                        ctx.fillText(data.text, data.x, data.y);
+                    } else if (data.action === 'fill') {
+                        // Render fill from other participant
+                        floodFill(data.x, data.y, data.color);
+                    }
+                } else if (data.type === 'whiteboard_clear') {
+                    // Clear canvas when other participant clears
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+            };
+
+            videoSocket.onclose = function (e) {
+                console.error('Video WebSocket closed unexpectedly');
+                updateSocketStateLabel();
+            };
+
+            videoSocket.onerror = function (e) {
+                console.error('Video WebSocket error:', e);
+                updateSocketStateLabel();
+            };
+
+            let localStream;
+            let remoteStream;
+            let peerConnection;
+            let audioEnabled = true;
+            let videoEnabled = true;
+            let screenStream = null;
+            let isScreenSharing = false;
+            let hasSentOffer = false;
+            let isEndingCall = false;
+            let remoteParticipantPresent = false;
+            let pendingIceCandidates = [];
+            let isMakingOffer = false;
+            let isRestartingIce = false;
+            let hasForcedRelay = false;
+            let statsIntervalId = null;
+
+            function normalizeUrls(urlField) {
+                if (Array.isArray(urlField)) return urlField;
+                if (typeof urlField === 'string') return [urlField];
+                return [];
+            }
+
+            function hasTurnServers() {
+                return iceServers.some(server =>
+                    normalizeUrls(server.urls).some(url => typeof url === 'string' && url.startsWith('turn:'))
+                );
+            }
+
+            function setStateLabel(id, value) {
+                const element = document.getElementById(id);
+                if (!element) return;
+                element.textContent = value || 'n/a';
+            }
+
+            function updateSocketStateLabel() {
+                const socketStates = ['connecting', 'open', 'closing', 'closed'];
+                setStateLabel('state-socket', socketStates[videoSocket.readyState] || 'unknown');
+            }
+
+            function updatePeerStateLabels() {
+                if (!peerConnection) {
+                    setStateLabel('state-signaling', 'new');
+                    setStateLabel('state-ice-connection', 'new');
+                    setStateLabel('state-ice-gathering', 'new');
+                    setStateLabel('state-peer-connection', 'new');
+                    setStateLabel('state-path', 'unknown');
+                    return;
+                }
+
+                setStateLabel('state-signaling', peerConnection.signalingState);
+                setStateLabel('state-ice-connection', peerConnection.iceConnectionState);
+                setStateLabel('state-ice-gathering', peerConnection.iceGatheringState);
+                setStateLabel('state-peer-connection', peerConnection.connectionState);
+            }
+
+            async function detectConnectionPath() {
+                if (!peerConnection) {
+                    setStateLabel('state-path', 'unknown');
+                    return;
+                }
+
+                try {
+                    const stats = await peerConnection.getStats();
+                    let selectedPair = null;
+
+                    stats.forEach(report => {
+                        if (report.type === 'transport' && report.selectedCandidatePairId && stats.has(report.selectedCandidatePairId)) {
+                            selectedPair = stats.get(report.selectedCandidatePairId);
+                        }
+                    });
+
+                    if (!selectedPair) {
+                        stats.forEach(report => {
+                            if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+                                selectedPair = report;
+                            }
+                        });
+                    }
+
+                    if (!selectedPair) {
+                        setStateLabel('state-path', 'unknown');
+                        return;
+                    }
+
+                    const localCandidate = stats.get(selectedPair.localCandidateId);
+                    const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+                    const localType = localCandidate?.candidateType || '';
+                    const remoteType = remoteCandidate?.candidateType || '';
+
+                    if (localType === 'relay' || remoteType === 'relay') {
+                        setStateLabel('state-path', 'relay');
+                        return;
+                    }
+
+                    if (localType || remoteType) {
+                        setStateLabel('state-path', 'direct');
+                        return;
+                    }
+
+                    setStateLabel('state-path', 'unknown');
+                } catch (error) {
+                    setStateLabel('state-path', 'unknown');
+                }
+            }
+
+            function startStatsPolling() {
+                if (statsIntervalId) {
+                    clearInterval(statsIntervalId);
+                }
+
+                statsIntervalId = setInterval(() => {
+                    detectConnectionPath();
+                }, 1500);
+            }
+
+            function stopStatsPolling() {
+                if (statsIntervalId) {
+                    clearInterval(statsIntervalId);
+                    statsIntervalId = null;
+                }
+            }
+
+            function sendSignal(type, payload) {
+                if (videoSocket.readyState !== WebSocket.OPEN) return;
+                videoSocket.send(JSON.stringify({
+                    type,
+                    payload
+                }));
+            }
+
+            async function flushPendingIceCandidates() {
+                if (!peerConnection || !peerConnection.remoteDescription) return;
+
+                while (pendingIceCandidates.length > 0) {
+                    const candidate = pendingIceCandidates.shift();
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    } catch (error) {
+                        console.error('Failed to add queued ICE candidate:', error);
+                    }
+                }
+            }
+
+            async function syncPeerConnectionTracks() {
+                if (!peerConnection || !localStream) return;
+
+                const senders = peerConnection.getSenders();
+                const localTracks = localStream.getTracks();
+
+                for (const track of localTracks) {
+                    const sender = senders.find(s => s.track && s.track.kind === track.kind);
+                    if (sender) {
+                        await sender.replaceTrack(track);
+                    } else {
+                        peerConnection.addTrack(track, localStream);
+                    }
+                }
+            }
+
+            async function replaceOutgoingVideoTrack(videoTrack) {
+                if (!peerConnection) return;
+                const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                if (sender) {
+                    await sender.replaceTrack(videoTrack);
+                }
+            }
+
+            async function tryStartOffer() {
+                if (hasSentOffer || !remoteParticipantPresent || !localStream || isMakingOffer) return;
+                if (videoSocket.readyState !== WebSocket.OPEN) return;
+                await createAndSendOffer();
+            }
+
+            async function ensurePeerConnection() {
+                if (peerConnection) return;
+
+                peerConnection = new RTCPeerConnection(rtcConfig);
+                remoteStream = new MediaStream();
+                document.getElementById('remote-video').srcObject = remoteStream;
+                startStatsPolling();
+
+                await syncPeerConnectionTracks();
+
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        sendSignal('ice_candidate', event.candidate);
+                    }
+                };
+
+                peerConnection.onsignalingstatechange = () => {
+                    updatePeerStateLabels();
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    updatePeerStateLabels();
+                    if (peerConnection.iceConnectionState === 'disconnected' || peerConnection.iceConnectionState === 'failed') {
+                        setTimeout(() => {
+                            restartIceIfNeeded();
+                        }, 300);
+                    }
+                    if (peerConnection.iceConnectionState === 'failed') {
+                        setTimeout(() => {
+                            forceRelayAndRecover();
+                        }, 800);
+                    }
+                };
+
+                peerConnection.onicegatheringstatechange = () => {
+                    updatePeerStateLabels();
+                };
+
+                peerConnection.onconnectionstatechange = () => {
+                    updatePeerStateLabels();
+                    detectConnectionPath();
+                    if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+                        setTimeout(() => {
+                            restartIceIfNeeded();
+                        }, 300);
+                    }
+                    if (peerConnection.connectionState === 'failed') {
+                        setTimeout(() => {
+                            forceRelayAndRecover();
+                        }, 800);
+                    }
+                };
+
+                peerConnection.ontrack = event => {
+                    event.streams[0].getTracks().forEach(track => remoteStream.addTrack(track));
+                };
+
+                peerConnection.onnegotiationneeded = async () => {
+                    if (!remoteParticipantPresent || isMakingOffer || peerConnection.signalingState !== 'stable') {
+                        return;
+                    }
+
+                    try {
+                        await createAndSendOffer();
+                    } catch (error) {
+                        console.error('Negotiation failed:', error);
+                    }
+                };
+
+                updatePeerStateLabels();
+            }
+
+            async function createAndSendOffer() {
+                await ensurePeerConnection();
+                await syncPeerConnectionTracks();
+
+                if (peerConnection.signalingState !== 'stable') {
+                    return;
+                }
+
+                isMakingOffer = true;
+
+                try {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    sendSignal('offer', peerConnection.localDescription);
+                    hasSentOffer = true;
+                } finally {
+                    isMakingOffer = false;
+                }
+            }
+
+            async function restartIceIfNeeded() {
+                if (!peerConnection || !remoteParticipantPresent || isMakingOffer || isRestartingIce) return;
+                if (peerConnection.signalingState !== 'stable') return;
+
+                const badStates = ['disconnected', 'failed'];
+                if (!badStates.includes(peerConnection.iceConnectionState) && !badStates.includes(peerConnection.connectionState)) {
+                    return;
+                }
+
+                isRestartingIce = true;
+                try {
+                    peerConnection.restartIce();
+                    await createAndSendOffer();
+                } catch (error) {
+                    console.error('ICE restart failed:', error);
+                } finally {
+                    isRestartingIce = false;
+                }
+            }
+
+            async function forceRelayAndRecover() {
+                if (!peerConnection || hasForcedRelay || !hasTurnServers()) return;
+
+                hasForcedRelay = true;
+                try {
+                    peerConnection.setConfiguration({
+                        ...rtcConfig,
+                        iceTransportPolicy: 'relay'
+                    });
+                    await restartIceIfNeeded();
+                } catch (error) {
+                    console.error('Relay fallback failed:', error);
+                }
+            }
+
+            // Get user media
+            async function startLocalStream() {
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({
+                        video: true,
+                        audio: true
+                    });
+                    document.getElementById('local-video').srcObject = localStream;
+                    await ensurePeerConnection();
+                    await syncPeerConnectionTracks();
+
+                    // If peer connection already exists (received offer before camera was ready),
+                    // renegotiate so our tracks get sent to the remote peer.
+                    if (peerConnection && remoteParticipantPresent && peerConnection.signalingState === 'stable' && !hasSentOffer) {
+                        await createAndSendOffer();
+                    } else {
+                        await tryStartOffer();
+                    }
+                } catch (error) {
+                    console.error('Error accessing media devices:', error);
+                    alert('Unable to access camera/microphone. Please allow camera/mic permissions.');
+                }
+            }
+
+            // Toggle audio
+            document.getElementById('toggle-audio').onclick = function () {
+                audioEnabled = !audioEnabled;
+                if (localStream && localStream.getAudioTracks().length > 0) {
+                    localStream.getAudioTracks()[0].enabled = audioEnabled;
+                }
+                this.textContent = audioEnabled ? '🎤 Mute Audio' : '🔇 Unmute Audio';
+                this.classList.toggle('bg-red-600');
+                this.classList.toggle('bg-blue-600');
+            };
+
+            // Toggle video
+            document.getElementById('toggle-video').onclick = function () {
+                videoEnabled = !videoEnabled;
+                if (localStream && localStream.getVideoTracks().length > 0) {
+                    localStream.getVideoTracks()[0].enabled = videoEnabled;
+                }
+                this.textContent = videoEnabled ? '📹 Stop Video' : '📹 Start Video';
+                this.classList.toggle('bg-red-600');
+                this.classList.toggle('bg-blue-600');
+            };
+
+            // Screen Sharing
+            document.getElementById('share-screen').onclick = async function () {
+                try {
+                    if (!isScreenSharing) {
+                        screenStream = await navigator.mediaDevices.getDisplayMedia({
+                            video: true
+                        });
+                        document.getElementById('local-video').srcObject = screenStream;
+                        await replaceOutgoingVideoTrack(screenStream.getVideoTracks()[0]);
+                        isScreenSharing = true;
+                        this.textContent = '🖥️ Stop Sharing';
+                        this.classList.remove('bg-purple-600');
+                        this.classList.add('bg-red-600');
+
+                        // Handle when user stops sharing via browser UI
+                        screenStream.getVideoTracks()[0].onended = () => {
+                            stopScreenSharing();
+                        };
+                    } else {
+                        stopScreenSharing();
+                    }
+                } catch (error) {
+                    console.error('Error sharing screen:', error);
+                    alert('Unable to share screen. Make sure you granted permission.');
+                }
+            };
+
+            function stopScreenSharing() {
+                if (screenStream) {
+                    screenStream.getTracks().forEach(track => track.stop());
+                }
+                document.getElementById('local-video').srcObject = localStream;
+                if (localStream && localStream.getVideoTracks().length > 0) {
+                    replaceOutgoingVideoTrack(localStream.getVideoTracks()[0]).catch(error => {
+                        console.error('Failed to restore camera track:', error);
+                    });
+                }
+                isScreenSharing = false;
+                document.getElementById('share-screen').textContent = '🖥️ Share Screen';
+                document.getElementById('share-screen').classList.remove('bg-red-600');
+                document.getElementById('share-screen').classList.add('bg-purple-600');
+            }
+
+            // Whiteboard functionality
+            const whiteboardModal = document.getElementById('whiteboard-modal');
+            const canvas = document.getElementById('whiteboard-canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Set canvas size
+            canvas.width = 1200;
+            canvas.height = 700;
+
+            // Whiteboard state
+            let isDrawing = false;
+            let currentTool = 'pen';
+            let currentColor = '#000000';
+            let penSize = 3;
+            let lastX = 0;
+            let lastY = 0;
+
+            // Fill canvas with white background
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Open whiteboard
+            document.getElementById('open-whiteboard').onclick = function () {
+                whiteboardModal.classList.remove('hidden');
+            };
+
+            // Close whiteboard
+            document.getElementById('close-whiteboard').onclick = function () {
+                whiteboardModal.classList.add('hidden');
+            };
+
+            // Tool selection
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                btn.onclick = function () {
+                    document.querySelectorAll('.tool-btn').forEach(b => {
+                        b.classList.remove('ring-2', 'ring-white');
+                    });
+                    this.classList.add('ring-2', 'ring-white');
+
+                    if (this.id === 'tool-pen') currentTool = 'pen';
+                    else if (this.id === 'tool-eraser') currentTool = 'eraser';
+                    else if (this.id === 'tool-text') currentTool = 'text';
+                    else if (this.id === 'tool-fill') currentTool = 'fill';
+
+                    // Update cursor
+                    if (currentTool === 'fill') {
+                        canvas.style.cursor = 'pointer';
+                    } else if (currentTool === 'text') {
+                        canvas.style.cursor = 'text';
+                    } else {
+                        canvas.style.cursor = 'crosshair';
+                    }
+                };
+            });
+
+            // Set initial tool
+            document.getElementById('tool-pen').classList.add('ring-2', 'ring-white');
+
+            // Color selection
+            document.getElementById('pen-color').oninput = function () {
+                currentColor = this.value;
+            };
+
+            document.querySelectorAll('.color-btn').forEach(btn => {
+                btn.onclick = function () {
+                    currentColor = this.dataset.color;
+                    document.getElementById('pen-color').value = currentColor;
+
+                    // Update border
+                    document.querySelectorAll('.color-btn').forEach(b => {
+                        b.classList.remove('border-white');
+                        b.classList.add('border-gray-600');
+                    });
+                    this.classList.remove('border-gray-600');
+                    this.classList.add('border-white');
+                };
+            });
+
+            // Pen size
+            document.getElementById('pen-size').oninput = function () {
+                penSize = this.value;
+                document.getElementById('size-display').textContent = penSize;
+            };
+
+            // Clear canvas
+            document.getElementById('clear-canvas').onclick = function () {
+                if (confirm('Are you sure you want to clear the whiteboard?')) {
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    // Broadcast clear action
+                    if (videoSocket.readyState === WebSocket.OPEN) {
+                        videoSocket.send(JSON.stringify({
+                            'type': 'whiteboard_clear',
+                            'sender': username
+                        }));
+                    }
+                }
+            };
+
+            // Drawing functions
+            function getCanvasCoordinates(e) {
+                const rect = canvas.getBoundingClientRect();
+                return {
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top
+                };
+            }
+
+            canvas.onmousedown = function (e) {
+                const coords = getCanvasCoordinates(e);
+
+                if (currentTool === 'text') {
+                    const text = prompt('Enter text:');
+                    if (text) {
+                        ctx.font = `${penSize * 8}px Arial`;
+                        ctx.fillStyle = currentColor;
+                        ctx.fillText(text, coords.x, coords.y);
+
+                        // Broadcast text action
+                        if (videoSocket.readyState === WebSocket.OPEN) {
+                            videoSocket.send(JSON.stringify({
+                                'type': 'whiteboard',
+                                'action': 'text',
+                                'tool': 'text',
+                                'color': currentColor,
+                                'size': penSize,
+                                'x': coords.x,
+                                'y': coords.y,
+                                'text': text,
+                                'sender': username
+                            }));
+                        }
+                    }
+                } else if (currentTool === 'fill') {
+                    floodFill(coords.x, coords.y, currentColor);
+
+                    // Broadcast fill action
+                    if (videoSocket.readyState === WebSocket.OPEN) {
+                        videoSocket.send(JSON.stringify({
+                            'type': 'whiteboard',
+                            'action': 'fill',
+                            'tool': 'fill',
+                            'color': currentColor,
+                            'x': coords.x,
+                            'y': coords.y,
+                            'sender': username
+                        }));
+                    }
+                } else {
+                    isDrawing = true;
+                    lastX = coords.x;
+                    lastY = coords.y;
+                }
+            };
+
+            canvas.onmousemove = function (e) {
+                if (!isDrawing) return;
+
+                const coords = getCanvasCoordinates(e);
+
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(coords.x, coords.y);
+
+                if (currentTool === 'eraser') {
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = penSize * 3;
+                } else {
+                    ctx.strokeStyle = currentColor;
+                    ctx.lineWidth = penSize;
+                }
+
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.stroke();
+
+                // Broadcast drawing action
+                if (videoSocket.readyState === WebSocket.OPEN) {
+                    videoSocket.send(JSON.stringify({
+                        'type': 'whiteboard',
+                        'action': 'draw',
+                        'tool': currentTool,
+                        'color': currentColor,
+                        'size': penSize,
+                        'x': coords.x,
+                        'y': coords.y,
+                        'lastX': lastX,
+                        'lastY': lastY,
+                        'sender': username
+                    }));
+                }
+
+                lastX = coords.x;
+                lastY = coords.y;
+            };
+
+            canvas.onmouseup = function () {
+                isDrawing = false;
+            };
+
+            canvas.onmouseleave = function () {
+                isDrawing = false;
+            };
+
+            // Simple flood fill algorithm
+            function floodFill(x, y, fillColor) {
+                x = Math.floor(x);
+                y = Math.floor(y);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const targetColor = getPixelColor(imageData, x, y);
+                const fillRGB = hexToRgb(fillColor);
+
+                if (colorsMatch(targetColor, fillRGB)) return;
+
+                const pixelStack = [[x, y]];
+
+                while (pixelStack.length > 0) {
+                    const [px, py] = pixelStack.pop();
+
+                    if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) continue;
+
+                    const currentColor = getPixelColor(imageData, px, py);
+
+                    if (colorsMatch(currentColor, targetColor)) {
+                        setPixelColor(imageData, px, py, fillRGB);
+                        pixelStack.push([px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]);
+                    }
+                }
+
+                ctx.putImageData(imageData, 0, 0);
+            }
+
+            function getPixelColor(imageData, x, y) {
+                const index = (y * imageData.width + x) * 4;
+                return {
+                    r: imageData.data[index],
+                    g: imageData.data[index + 1],
+                    b: imageData.data[index + 2],
+                    a: imageData.data[index + 3]
+                };
+            }
+
+            function setPixelColor(imageData, x, y, color) {
+                const index = (y * imageData.width + x) * 4;
+                imageData.data[index] = color.r;
+                imageData.data[index + 1] = color.g;
+                imageData.data[index + 2] = color.b;
+                imageData.data[index + 3] = 255;
+            }
+
+            function colorsMatch(c1, c2, tolerance = 10) {
+                return Math.abs(c1.r - c2.r) <= tolerance &&
+                    Math.abs(c1.g - c2.g) <= tolerance &&
+                    Math.abs(c1.b - c2.b) <= tolerance;
+            }
+
+            function hexToRgb(hex) {
+                const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                return result ? {
+                    r: parseInt(result[1], 16),
+                    g: parseInt(result[2], 16),
+                    b: parseInt(result[3], 16)
+                } : { r: 0, g: 0, b: 0 };
+            }
+
+            async function cleanupMedia(closeSocket = true) {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                if (screenStream) {
+                    screenStream.getTracks().forEach(track => track.stop());
+                    screenStream = null;
+                }
+
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+
+                stopStatsPolling();
+
+                pendingIceCandidates = [];
+                hasSentOffer = false;
+                remoteParticipantPresent = false;
+                isMakingOffer = false;
+                isRestartingIce = false;
+                hasForcedRelay = false;
+
+                if (closeSocket && videoSocket && videoSocket.readyState !== WebSocket.CLOSED) {
+                    videoSocket.close();
+                }
+
+                updatePeerStateLabels();
+                updateSocketStateLabel();
+            }
+
+            function waitForSignalDelivery() {
+                return new Promise(resolve => setTimeout(resolve, 150));
+            }
+
+            async function endCall() {
+                if (isEndingCall) return;
+                isEndingCall = true;
+
+                sendSignal('end_call', null);
+                await waitForSignalDelivery();
+
+                try {
+                    await fetch(endCallUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'X-CSRFToken': csrfToken,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error ending call:', error);
+                }
+
+                await cleanupMedia(true);
+                window.location.href = callListUrl;
+            }
+
+            document.getElementById('end-call').onclick = endCall;
+
+            // Copy room link button
+            const copyLinkBtn = document.getElementById('copy-room-link');
+            if (copyLinkBtn) {
+                copyLinkBtn.onclick = function () {
+                    navigator.clipboard.writeText(window.location.href).then(() => {
+                        this.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                        this.classList.add('bg-green-700');
+                        setTimeout(() => {
+                            this.innerHTML = '<i class="fas fa-link"></i> Copy Room Link';
+                            this.classList.remove('bg-green-700');
+                        }, 2000);
+                    });
+                };
+            }
+
+            // Hide waiting badge when remote participant joins
+            const _origOnMessage = videoSocket.onmessage;
+            videoSocket.onmessage = async function (e) {
+                const data = JSON.parse(e.data);
+                if (data.type === 'participant_joined' && data.sender !== username) {
+                    const badge = document.getElementById('waiting-badge');
+                    if (badge) badge.style.display = 'none';
+                }
+                await _origOnMessage.call(this, e);
+            };
+
+            // Start on load
+            updateSocketStateLabel();
+            updatePeerStateLabels();
+            detectConnectionPath();
+
+            startLocalStream().then(() => {
+                if (videoSocket.readyState === WebSocket.OPEN && isCaller) {
+                    // Offer is triggered once another participant joins.
+                }
+            });
+        </script>
+        {% endblock %}
